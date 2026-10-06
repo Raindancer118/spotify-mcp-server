@@ -1,9 +1,31 @@
+import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { MAX_BULK_IDS, partialFailure, processInChunks } from './paging.js';
 import { playlistIdFrom, playlistParam } from './resolve.js';
 import { defineTool, toolError } from './tool.js';
 import type { SpotifyHandlerExtra } from './types.js';
-import { handleSpotifyRequest, isGatewayError, spotifyFetch } from './utils.js';
+import {
+  handleSpotifyRequest,
+  isGatewayError,
+  SpotifyApiError,
+  spotifyFetch,
+} from './utils.js';
+
+// Spotify's limit applies to the base64 payload, not the raw file.
+const MAX_COVER_BASE64_BYTES = 256 * 1024;
+
+async function loadCoverImage(source: string): Promise<Buffer> {
+  if (/^https?:\/\//i.test(source)) {
+    const response = await fetch(source);
+    if (!response.ok) {
+      throw new Error(
+        `Downloading ${source} failed (${response.status} ${response.statusText})`,
+      );
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+  return readFile(source);
+}
 
 const getPlaylist = defineTool({
   name: 'getPlaylist',
@@ -341,10 +363,74 @@ const unfollowPlaylist = defineTool({
   },
 });
 
+const uploadPlaylistCover = defineTool({
+  name: 'uploadPlaylistCover',
+  description:
+    'Set the cover image of a Spotify playlist from a local file path or an http(s) URL. ' +
+    'The image must be a JPEG of at most about 190 KB (Spotify caps the base64 payload at 256 KB); ' +
+    'a square image of 300-640 px works best. Spotify may take a moment to show the new cover.',
+  schema: {
+    playlistId: playlistParam,
+    image: z
+      .string()
+      .min(1)
+      .describe('Absolute path to a local JPEG file, or an http(s) URL of one'),
+  },
+  handler: async (args, _extra: SpotifyHandlerExtra) => {
+    const { playlistId: playlistRef, image } = args;
+    try {
+      const bytes = await loadCoverImage(image);
+      if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) {
+        throw new Error(
+          'The image is not a JPEG. Spotify only accepts JPEG covers; convert it first.',
+        );
+      }
+      const data = bytes.toString('base64');
+      if (data.length > MAX_COVER_BASE64_BYTES) {
+        throw new Error(
+          `The image is too large: ${Math.ceil(data.length / 1024)} KB as base64, Spotify allows 256 KB. ` +
+            'Resize or recompress it (a 640x640 JPEG at quality 85 is usually well below the limit).',
+        );
+      }
+
+      const playlistId = await playlistIdFrom(playlistRef);
+      try {
+        await spotifyFetch(`playlists/${playlistId}/images`, {
+          method: 'PUT',
+          rawBody: { data, contentType: 'image/jpeg' },
+        });
+      } catch (error) {
+        if (
+          error instanceof SpotifyApiError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          throw new Error(
+            `${error.message}\nUploading covers needs the "ugc-image-upload" scope. ` +
+              'Run "npm run auth" once to grant it.',
+          );
+        }
+        throw error;
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Successfully set the playlist cover (ID: ${playlistId}, ${Math.round(bytes.length / 1024)} KB JPEG). It may take a few seconds to appear in Spotify.`,
+          },
+        ],
+      };
+    } catch (error) {
+      return toolError('uploading playlist cover', error);
+    }
+  },
+});
+
 export const playlistTools = [
   getPlaylist,
   updatePlaylist,
   removeTracksFromPlaylist,
   reorderPlaylistItems,
   unfollowPlaylist,
+  uploadPlaylistCover,
 ];

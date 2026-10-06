@@ -192,12 +192,14 @@ export async function spotifyFetch<T = unknown>(
   options: {
     method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
     body?: unknown;
+    /** Sent verbatim instead of a JSON body, e.g. a base64 playlist cover. */
+    rawBody?: { data: string; contentType: string };
     query?: Record<string, string | number | undefined>;
     /** Retry 502/503/504. Defaults to true except for POST. */
     retryGatewayErrors?: boolean;
   } = {},
 ): Promise<T> {
-  const { method = 'GET', body, query } = options;
+  const { method = 'GET', body, rawBody, query } = options;
   const retryGateway = options.retryGatewayErrors ?? method !== 'POST';
   let config = loadSpotifyConfig();
   if (needsRefresh(config, 0)) config = await refreshSpotifyConfig(0);
@@ -220,14 +222,23 @@ export async function spotifyFetch<T = unknown>(
     if (qsStr) url += `?${qsStr}`;
   }
 
-  const init: RequestInit = {
-    method,
-    headers: {
-      Authorization: `Bearer ${config.accessToken}`,
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  };
+  const init: RequestInit = rawBody
+    ? {
+        method,
+        headers: {
+          Authorization: `Bearer ${config.accessToken}`,
+          'Content-Type': rawBody.contentType,
+        },
+        body: rawBody.data,
+      }
+    : {
+        method,
+        headers: {
+          Authorization: `Bearer ${config.accessToken}`,
+          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      };
 
   let response = await fetch(url, init);
   for (
@@ -460,6 +471,7 @@ export async function authorizeSpotify(): Promise<void> {
     'user-library-modify',
     'user-read-recently-played',
     'user-top-read',
+    'ugc-image-upload',
   ];
 
   const authParams = new URLSearchParams({

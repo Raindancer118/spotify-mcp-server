@@ -38,6 +38,7 @@ export const toolNames = [
   'removeTracksFromPlaylist',
   'reorderPlaylistItems',
   'unfollowPlaylist',
+  'uploadPlaylistCover',
   'saveTracksToLibrary',
   'checkUsersSavedTracks',
   'setShuffle',

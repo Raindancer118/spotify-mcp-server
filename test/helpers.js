@@ -88,9 +88,17 @@ export function mockHttp(t, expected) {
     assert.equal(request.method, step.method ?? 'GET');
     assert.equal(
       request.headers.get('authorization'),
-      step.authorization ?? 'Bearer test-access',
+      'authorization' in step ? step.authorization : 'Bearer test-access',
     );
+    if (step.contentType)
+      assert.equal(request.headers.get('content-type'), step.contentType);
+    if (step.rawBody !== undefined) assert.equal(body, step.rawBody);
     if (step.body !== undefined) assert.deepEqual(JSON.parse(body), step.body);
+    if (step.bytes)
+      return new Response(step.bytes, {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg' },
+      });
     if (step.form)
       assert.deepEqual(
         Object.fromEntries(new URLSearchParams(body)),
