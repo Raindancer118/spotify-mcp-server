@@ -1,6 +1,4 @@
-import dns from 'node:dns';
 import { readFile, stat } from 'node:fs/promises';
-import { BlockList, isIP } from 'node:net';
 import { extname } from 'node:path';
 import { z } from 'zod';
 import { MAX_BULK_IDS, partialFailure, processInChunks } from './paging.js';
@@ -16,76 +14,30 @@ import {
 
 // Spotify's limit applies to the base64 payload, not the raw file.
 const MAX_COVER_BASE64_BYTES = 256 * 1024;
-const MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024;
+const MAX_COVER_FILE_BYTES = (MAX_COVER_BASE64_BYTES / 4) * 3;
 
-// The tool may be driven by untrusted prompt content, so it must not become a
-// way to read local services or arbitrary files and ship them to Spotify.
-const nonPublic = new BlockList();
-for (const [net, prefix] of [
-  ['0.0.0.0', 8],
-  ['10.0.0.0', 8],
-  ['100.64.0.0', 10],
-  ['127.0.0.0', 8],
-  ['169.254.0.0', 16],
-  ['172.16.0.0', 12],
-  ['192.168.0.0', 16],
-  ['224.0.0.0', 3],
-] as const) {
-  nonPublic.addSubnet(net, prefix, 'ipv4');
-}
-for (const [net, prefix] of [
-  ['::', 127],
-  ['fc00::', 7],
-  ['fe80::', 10],
-  ['ff00::', 8],
-] as const) {
-  nonPublic.addSubnet(net, prefix, 'ipv6');
-}
-
-async function assertPublicHost(url: URL): Promise<void> {
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  const addresses = isIP(host)
-    ? [{ address: host, family: isIP(host) }]
-    : await dns.promises.lookup(host, { all: true });
-  for (const { address, family } of addresses) {
-    const mapped = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
-    if (
-      mapped
-        ? nonPublic.check(mapped, 'ipv4')
-        : nonPublic.check(address, family === 6 ? 'ipv6' : 'ipv4')
-    ) {
-      throw new Error(
-        `Refusing to download from ${url.hostname}: only public internet hosts are allowed.`,
-      );
-    }
-  }
-}
-
+// Deliberately local-only: fetching URLs from a tool that untrusted prompt
+// content can drive would open SSRF/DNS-rebinding holes. Download first.
 async function loadCoverImage(source: string): Promise<Buffer> {
-  if (/^https?:\/\//i.test(source)) {
-    const url = new URL(source);
-    await assertPublicHost(url);
-    // Redirects could point back into the local network, so don't follow them.
-    const response = await fetch(url, { redirect: 'error' });
-    if (!response.ok) {
-      throw new Error(
-        `Downloading ${source} failed (${response.status} ${response.statusText})`,
-      );
-    }
-    const length = Number(response.headers.get('content-length') ?? 0);
-    if (length > MAX_DOWNLOAD_BYTES) {
-      throw new Error(`The image at ${source} is larger than 5 MB.`);
-    }
-    return Buffer.from(await response.arrayBuffer());
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(source)) {
+    throw new Error(
+      'URLs are not supported. Download the image first and pass the local .jpg path.',
+    );
   }
-
   if (!['.jpg', '.jpeg'].includes(extname(source).toLowerCase())) {
     throw new Error(
       'Local covers must be JPEG files with a .jpg or .jpeg extension.',
     );
   }
-  if (!(await stat(source)).isFile()) {
+  const info = await stat(source);
+  if (!info.isFile()) {
     throw new Error(`${source} is not a regular file.`);
+  }
+  if (info.size > MAX_COVER_FILE_BYTES) {
+    throw new Error(
+      `The image is too large: ${Math.ceil(info.size / 1024)} KB, Spotify allows about 192 KB (256 KB as base64). ` +
+        'Resize or recompress it (a 640x640 JPEG at quality 85 is usually well below the limit).',
+    );
   }
   return readFile(source);
 }
@@ -429,15 +381,15 @@ const unfollowPlaylist = defineTool({
 const uploadPlaylistCover = defineTool({
   name: 'uploadPlaylistCover',
   description:
-    'Set the cover image of a Spotify playlist from a local file path or an http(s) URL. ' +
-    'The image must be a JPEG of at most about 190 KB (Spotify caps the base64 payload at 256 KB); ' +
+    'Set the cover image of a Spotify playlist from a local JPEG file (URLs are not accepted; download first). ' +
+    'The image must be a .jpg of at most about 192 KB (Spotify caps the base64 payload at 256 KB); ' +
     'a square image of 300-640 px works best. Spotify may take a moment to show the new cover.',
   schema: {
     playlistId: playlistParam,
     image: z
       .string()
       .min(1)
-      .describe('Absolute path to a local JPEG file, or an http(s) URL of one'),
+      .describe('Absolute path to a local .jpg/.jpeg file'),
   },
   handler: async (args, _extra: SpotifyHandlerExtra) => {
     const { playlistId: playlistRef, image } = args;

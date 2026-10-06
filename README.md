@@ -402,10 +402,10 @@ Large ID lists are accepted by `saveTracksToLibrary`, `removeUsersSavedTracks`, 
 
 5. **uploadPlaylistCover**
 
-   - **Description**: Set a playlist's cover image from a local JPEG or an http(s) URL. Needs the `ugc-image-upload` scope (re-run `npm run auth` once if you authenticated before this tool existed)
+   - **Description**: Set a playlist's cover image from a local JPEG (URLs are intentionally not supported; download the image first). Needs the `ugc-image-upload` scope (re-run `npm run auth` once if you authenticated before this tool existed)
    - **Parameters**:
      - `playlistId` (string): The playlist, by Spotify ID or by name
-     - `image` (string): Absolute path to a JPEG file, or an http(s) URL of one (max. 256 KB as base64, roughly 190 KB on disk)
+     - `image` (string): Absolute path to a .jpg/.jpeg file (max. about 192 KB, i.e. 256 KB as base64)
    - **Returns**: Success confirmation
    - **Example**: `uploadPlaylistCover({ playlistId: "3cEYpjA9oz9GiPac4AsH4n", image: "/home/me/cover.jpg" })`
 

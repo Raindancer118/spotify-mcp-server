@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import dns from 'node:dns';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,43 +43,15 @@ test('uploadPlaylistCover sends a local JPEG as base64', async (t) => {
   assert.match(resultText(result), /cover/i);
 });
 
-test('uploadPlaylistCover downloads an image URL first', async (t) => {
-  t.mock.method(dns.promises, 'lookup', async () => [
-    { address: '93.184.216.34', family: 4 },
-  ]);
-  const result = await upload(
-    t,
-    [
-      {
-        url: 'https://images.example.com/cover.jpg',
-        authorization: null,
-        bytes: jpeg,
-      },
-      {
-        url: `playlists/${P22}/images`,
-        method: 'PUT',
-        rawBody: jpeg.toString('base64'),
-        status: 202,
-      },
-    ],
-    { playlistId: P22, image: 'https://images.example.com/cover.jpg' },
-  );
-  assert.match(resultText(result), /cover/i);
-});
-
-for (const [label, url, address] of [
-  ['localhost', 'http://localhost:8080/cover.jpg', '127.0.0.1'],
-  ['a private network host', 'https://nas.lan/cover.jpg', '192.168.1.10'],
-  ['a link-local address', 'http://169.254.169.254/latest', '169.254.169.254'],
-  ['an IPv6 loopback', 'http://[::1]/cover.jpg', '::1'],
+for (const url of [
+  'https://images.example.com/cover.jpg',
+  'http://localhost:8080/cover.jpg',
+  'file:///etc/passwd.jpg',
 ]) {
-  test(`uploadPlaylistCover refuses to fetch from ${label}`, async (t) => {
-    t.mock.method(dns.promises, 'lookup', async () => [
-      { address, family: address.includes(':') ? 6 : 4 },
-    ]);
+  test(`uploadPlaylistCover refuses URLs (${url})`, async (t) => {
     const result = await upload(t, [], { playlistId: P22, image: url });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /public/);
+    assert.match(result.content[0].text, /URLs are not supported/);
   });
 }
 
